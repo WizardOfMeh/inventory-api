@@ -99,11 +99,11 @@ discards every skipped entry, so the cost grows linearly with page depth. On
 
 | | `OFFSET 490000` | Keyset |
 |---|---|---|
-| Execution time | **129.402 ms** | **0.060 ms** |
+| Execution time | **104.668 ms** | **0.045 ms** |
 | Rows read | 490,020 | 20 |
 | Buffers | 272,557 | 10 |
 
-Roughly **2000× faster**, and the keyset cost stays flat however deep the
+Roughly **2300× faster**, and the keyset cost stays flat however deep the
 client pages. Both queries use the same index; the difference is entirely in
 how they enter it:
 
