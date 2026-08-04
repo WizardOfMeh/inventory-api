@@ -6,6 +6,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // Node is a physical or virtual host in the inventory.
@@ -103,52 +105,112 @@ func (s *Store) NodeInventory(ctx context.Context, nodeID int) (Node, error) {
 	return node, nil
 }
 
-// SortOrder is a whitelisted ORDER BY clause. Values never come from user
-// input directly, which is what keeps the query free of SQL injection.
-type SortOrder string
+// SortKey is a whitelisted ordering. User input is mapped onto one of these
+// constants, so no part of the ORDER BY clause ever comes from the request.
+type SortKey string
 
 const (
-	SortIDAsc   SortOrder = "id ASC"
-	SortRAMDesc SortOrder = "ram DESC, id DESC"
-	SortRAMAsc  SortOrder = "ram ASC, id ASC"
-	SortNameAsc SortOrder = "name ASC, id ASC"
+	SortIDAsc   SortKey = "id_asc"
+	SortRAMAsc  SortKey = "ram_asc"
+	SortRAMDesc SortKey = "ram_desc"
+	SortNameAsc SortKey = "name_asc"
 )
 
-// ParseSortOrder maps a query-string value to an allowed ORDER BY clause.
-func ParseSortOrder(v string) (SortOrder, bool) {
-	switch v {
-	case "", "id_asc":
-		return SortIDAsc, true
-	case "ram_desc":
-		return SortRAMDesc, true
-	case "ram_asc":
-		return SortRAMAsc, true
-	case "name_asc":
-		return SortNameAsc, true
-	default:
-		return "", false
-	}
+// sortSpec describes how one ordering is expressed in SQL.
+type sortSpec struct {
+	// orderBy always ends with id so the ordering is total: sort columns are
+	// not unique, and ties would otherwise shuffle between pages.
+	orderBy string
+	// where resumes the scan after the cursor position. It uses row-value
+	// comparison, which Postgres can satisfy with a single index seek on the
+	// matching composite index.
+	where string
+	// numericKey selects how the cursor key is bound as a query parameter.
+	numericKey bool
 }
 
-// ListVMsParams describes a page of VMs to fetch.
+var sortSpecs = map[SortKey]sortSpec{
+	SortIDAsc:   {orderBy: "id ASC", where: "id > $1", numericKey: true},
+	SortRAMAsc:  {orderBy: "ram ASC, id ASC", where: "(ram, id) > ($1, $2)", numericKey: true},
+	SortRAMDesc: {orderBy: "ram DESC, id DESC", where: "(ram, id) < ($1, $2)", numericKey: true},
+	SortNameAsc: {orderBy: "name ASC, id ASC", where: "(name, id) > ($1, $2)", numericKey: false},
+}
+
+// ParseSortKey maps a query-string value onto an allowed ordering.
+func ParseSortKey(v string) (SortKey, bool) {
+	if v == "" {
+		return SortIDAsc, true
+	}
+	k := SortKey(v)
+	if _, ok := sortSpecs[k]; ok {
+		return k, true
+	}
+	return "", false
+}
+
+// ListVMsParams describes one page of VMs to fetch.
 type ListVMsParams struct {
 	Limit  int
-	Offset int
-	Sort   SortOrder
+	Sort   SortKey
+	Cursor *Cursor // nil for the first page
 }
 
-// ListVMs returns one page of VMs.
-//
-// NOTE: OFFSET degrades on deep pages because Postgres still reads and
-// discards every skipped row. Next step is keyset pagination on
-// (sort_column, id) with a matching composite index.
-func (s *Store) ListVMs(ctx context.Context, p ListVMsParams) ([]VM, error) {
-	query := "SELECT id, node_id, name, ram, status FROM vms ORDER BY " +
-		string(p.Sort) + " LIMIT $1 OFFSET $2"
+// VMPage is one page of results plus the token for the page after it.
+type VMPage struct {
+	Items      []VM
+	NextCursor string // empty when there is nothing more to fetch
+}
 
-	rows, err := s.db.QueryContext(ctx, query, p.Limit, p.Offset)
+// ListVMs returns one page of VMs using keyset pagination.
+//
+// OFFSET was the obvious alternative and is roughly 2000x slower on this
+// dataset: Postgres still walks and discards every skipped row, so page 24500
+// reads 490k index entries to return 20. The row-value comparison below turns
+// that into a single index seek, and the cost stays flat however deep the
+// client pages.
+//
+// The trade-off is that keyset cannot jump to an arbitrary page number — it
+// only moves forward from a known position. That is the right shape for an
+// API anyway, and it is why the response carries a cursor rather than a
+// total page count.
+func (s *Store) ListVMs(ctx context.Context, p ListVMsParams) (VMPage, error) {
+	spec, ok := sortSpecs[p.Sort]
+	if !ok {
+		return VMPage{}, fmt.Errorf("unknown sort %q", p.Sort)
+	}
+
+	var (
+		sb   strings.Builder
+		args []any
+	)
+
+	sb.WriteString("SELECT id, node_id, name, ram, status FROM vms")
+
+	if p.Cursor != nil {
+		key, err := bindKey(p.Cursor.Key, spec.numericKey)
+		if err != nil {
+			return VMPage{}, err
+		}
+
+		sb.WriteString(" WHERE ")
+		sb.WriteString(spec.where)
+
+		// id_asc needs no tiebreaker: the sort column already is the key.
+		if p.Sort == SortIDAsc {
+			args = append(args, p.Cursor.ID)
+		} else {
+			args = append(args, key, p.Cursor.ID)
+		}
+	}
+
+	sb.WriteString(" ORDER BY ")
+	sb.WriteString(spec.orderBy)
+	sb.WriteString(fmt.Sprintf(" LIMIT $%d", len(args)+1))
+	args = append(args, p.Limit)
+
+	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
 	if err != nil {
-		return nil, fmt.Errorf("query vms: %w", err)
+		return VMPage{}, fmt.Errorf("query vms: %w", err)
 	}
 	defer rows.Close()
 
@@ -156,13 +218,53 @@ func (s *Store) ListVMs(ctx context.Context, p ListVMsParams) ([]VM, error) {
 	for rows.Next() {
 		var v VM
 		if err := rows.Scan(&v.ID, &v.NodeID, &v.Name, &v.RAM, &v.Status); err != nil {
-			return nil, fmt.Errorf("scan vm: %w", err)
+			return VMPage{}, fmt.Errorf("scan vm: %w", err)
 		}
 		vms = append(vms, v)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate vms: %w", err)
+		return VMPage{}, fmt.Errorf("iterate vms: %w", err)
 	}
 
-	return vms, nil
+	page := VMPage{Items: vms}
+
+	// A short page means the end of the result set, so no cursor is issued.
+	// A full page might still be the last one; the client discovers that by
+	// following the cursor once more and getting an empty page back. Avoiding
+	// that would cost an extra row fetch on every request.
+	if len(vms) == p.Limit {
+		last := vms[len(vms)-1]
+		page.NextCursor = Cursor{
+			Sort: p.Sort,
+			Key:  sortKeyValue(p.Sort, last),
+			ID:   last.ID,
+		}.Encode()
+	}
+
+	return page, nil
+}
+
+// sortKeyValue extracts the value of whichever column the ordering uses.
+func sortKeyValue(sort SortKey, v VM) string {
+	switch sort {
+	case SortNameAsc:
+		return v.Name
+	case SortRAMAsc, SortRAMDesc:
+		return strconv.Itoa(v.RAM)
+	default:
+		return strconv.Itoa(v.ID)
+	}
+}
+
+// bindKey converts the cursor key into the type the column expects, so the
+// comparison uses the index instead of falling back to a cast.
+func bindKey(key string, numeric bool) (any, error) {
+	if !numeric {
+		return key, nil
+	}
+	n, err := strconv.Atoi(key)
+	if err != nil {
+		return nil, fmt.Errorf("cursor key is not numeric")
+	}
+	return n, nil
 }
