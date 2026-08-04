@@ -1,0 +1,22 @@
+# golangci-lint v2 configuration.
+# If you are still on v1, run: golangci-lint migrate
+version: "2"
+
+linters:
+  enable:
+    - errcheck      # unchecked errors — the single most common Go bug
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - bodyclose     # leaked HTTP response bodies
+    - rowserrcheck  # missing rows.Err() after iterating sql.Rows
+    - sqlclosecheck # unclosed sql.Rows / sql.Stmt
+    - noctx         # HTTP requests built without a context
+    - errorlint     # error comparison that breaks with wrapping
+    - gosec
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gosec, errcheck]
