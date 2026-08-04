@@ -18,3 +18,4 @@ data:
   # Must stay below terminationGracePeriodSeconds in the Deployment,
   # otherwise the kubelet SIGKILLs the process mid-shutdown.
   HTTP_SHUTDOWN_TIMEOUT: "10s"
+  DB_STARTUP_TIMEOUT: "20s"
