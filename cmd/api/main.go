@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -99,16 +100,64 @@ func openDB(ctx context.Context, cfg config.Config) (*sql.DB, error) {
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 
-	// sql.Open only builds the pool; it never contacts the server.
-	// Ping here so a bad DSN fails at startup, not on the first request.
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	if err := db.PingContext(pingCtx); err != nil {
+	// sql.Open only builds the pool; it never contacts the server, so the
+	// first real check is the ping below.
+	//
+	// Exiting on the first failed ping is wrong for a containerised service:
+	// the database is a separate lifecycle, and "not ready yet" is normal
+	// during a deploy or a database restart. Failing fast there produces a
+	// CrashLoopBackOff on top of an outage. Retry with exponential backoff
+	// instead, but keep it bounded so a genuinely bad DSN still fails the
+	// startup probe rather than hanging forever.
+	if err := pingWithRetry(ctx, db, cfg.StartupTimeout); err != nil {
 		db.Close()
 		return nil, err
 	}
 
 	slog.Info("database connected")
 	return db, nil
+}
+
+// pingWithRetry blocks until the database answers, the overall budget runs
+// out, or ctx is cancelled (SIGTERM during startup).
+func pingWithRetry(ctx context.Context, db *sql.DB, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	backoff := 500 * time.Millisecond
+	const maxBackoff = 5 * time.Second
+
+	for attempt := 1; ; attempt++ {
+		pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		err := db.PingContext(pingCtx)
+		cancel()
+
+		if err == nil {
+			return nil
+		}
+
+		// The parent context is cancelled on SIGINT/SIGTERM: stop retrying
+		// and let the process exit promptly instead of ignoring the signal.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if time.Now().Add(backoff).After(deadline) {
+			return fmt.Errorf("database unreachable after %s: %w", budget, err)
+		}
+
+		slog.Warn("database not ready, retrying",
+			"attempt", attempt,
+			"retry_in", backoff.String(),
+			"err", err,
+		)
+
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
 }
