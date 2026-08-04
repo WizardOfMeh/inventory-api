@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-api
+  labels:
+    app.kubernetes.io/name: inventory-api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+
+  # maxUnavailable: 0 keeps full capacity during a rollout; with 2 replicas
+  # the alternative would briefly serve traffic from a single pod.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-api
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: inventory-api
+    spec:
+      # The app never calls the Kubernetes API, so it does not need a token
+      # mounted into every pod.
+      automountServiceAccountToken: false
+
+      # Longer than HTTP_SHUTDOWN_TIMEOUT (10s) plus the preStop sleep (5s),
+      # so graceful shutdown actually completes before SIGKILL.
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread replicas across nodes so one node going down does not take
+      # out the whole service. ScheduleAnyway keeps a single-node cluster working.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: inventory-api
+
+      containers:
+        - name: api
+          # Immutable tag: :latest with IfNotPresent silently keeps the old
+          # image forever. Set by `make deploy`.
+          image: registry.home.lab/inventory-api:CHANGEME
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+
+          envFrom:
+            - configMapRef:
+                name: inventory-api-config
+            - secretRef:
+                name: inventory-api-secret
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              # No CPU limit on purpose: CPU is compressible, and a limit
+              # causes throttling that shows up as latency spikes. Memory is
+              # not compressible, so it is capped.
+              memory: 128Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          # Removing an endpoint from Service and stopping traffic are not
+          # synchronous. This sleep lets kube-proxy/Traefik notice the pod is
+          # terminating before the process starts refusing connections.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+
+          # Startup probe first: gives a slow start (DB ping, migrations) up
+          # to 30s without a jittery liveness threshold killing the pod.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 10
+
+          # Liveness must NOT depend on the database. A dead DB is not a
+          # reason to restart a healthy process — that only adds a crash loop
+          # on top of an outage.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          # Readiness DOES depend on the database: a pod that cannot reach
+          # Postgres should not receive traffic. failureThreshold 3 keeps a
+          # brief blip from emptying every endpoint at once.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          # readOnlyRootFilesystem blocks writes, so anything that needs a
+          # scratch area gets an explicit emptyDir.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
