@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-api-config
+  labels:
+    app.kubernetes.io/name: inventory-api
+data:
+  API_ADDR: ":8080"
+
+  DB_MAX_OPEN_CONNS: "25"
+  DB_MAX_IDLE_CONNS: "25"
+  DB_CONN_MAX_LIFETIME: "5m"
+
+  HTTP_READ_HEADER_TIMEOUT: "5s"
+  HTTP_READ_TIMEOUT: "10s"
+  HTTP_WRITE_TIMEOUT: "15s"
+  HTTP_IDLE_TIMEOUT: "60s"
+  # Must stay below terminationGracePeriodSeconds in the Deployment,
+  # otherwise the kubelet SIGKILLs the process mid-shutdown.
+  HTTP_SHUTDOWN_TIMEOUT: "10s"

@@ -1,0 +1,23 @@
+# k3s ships Traefik as the default ingress controller, so no extra install
+# is needed. Adjust the host to something your DNS actually resolves.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: inventory-api
+  labels:
+    app.kubernetes.io/name: inventory-api
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: inventory.home.lab
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: inventory-api
+                port:
+                  name: http
