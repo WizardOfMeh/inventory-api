@@ -24,6 +24,12 @@ type Config struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
+
+	// StartupTimeout bounds how long the process waits for the database to
+	// become reachable before giving up. Keep it under the time the
+	// Kubernetes startupProbe allows (periodSeconds * failureThreshold),
+	// otherwise the kubelet kills the pod mid-wait.
+	StartupTimeout time.Duration
 }
 
 // Load reads configuration from the environment and validates it.
@@ -42,6 +48,8 @@ func Load() (Config, error) {
 		WriteTimeout:      envDuration("HTTP_WRITE_TIMEOUT", 15*time.Second),
 		IdleTimeout:       envDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
 		ShutdownTimeout:   envDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
+
+		StartupTimeout: envDuration("DB_STARTUP_TIMEOUT", 20*time.Second),
 	}
 
 	if cfg.DatabaseURL == "" {
