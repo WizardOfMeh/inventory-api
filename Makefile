@@ -50,7 +50,7 @@ migrate-status: ## Show migration state
 	goose -dir migrations postgres "$(DB_URL)" status
 
 seed: ## Load the large synthetic dataset used for pagination benchmarks
-	psql "$(DB_URL)" -f migrations/seed.sql
+	psql "$(DB_URL)" -f testdata/seed.sql
 
 ## ---- container ------------------------------------------------------
 
