@@ -45,6 +45,9 @@ func (a *API) getNodeInventory(w http.ResponseWriter, r *http.Request) {
 }
 
 // listVMs handles GET /api/v1/vms.
+//
+// Pagination is cursor-based: the client passes back the token from the
+// previous response instead of an offset. See store.ListVMs for why.
 func (a *API) listVMs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -62,26 +65,27 @@ func (a *API) listVMs(w http.ResponseWriter, r *http.Request) {
 		limit = v
 	}
 
-	offset := 0
-	if raw := q.Get("offset"); raw != "" {
-		v, err := strconv.Atoi(raw)
-		if err != nil || v < 0 {
-			writeError(w, http.StatusBadRequest, "offset must be a non-negative integer")
-			return
-		}
-		offset = v
-	}
-
-	sort, ok := store.ParseSortOrder(q.Get("sort"))
+	sort, ok := store.ParseSortKey(q.Get("sort"))
 	if !ok {
 		writeError(w, http.StatusBadRequest, "sort must be one of: id_asc, ram_asc, ram_desc, name_asc")
 		return
 	}
 
-	vms, err := a.Store.ListVMs(r.Context(), store.ListVMsParams{
+	var cursor *store.Cursor
+	if raw := q.Get("cursor"); raw != "" {
+		c, err := store.DecodeCursor(raw, sort)
+		if err != nil {
+			// The cursor is client-supplied, so a bad one is a 400, not a 500.
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		cursor = &c
+	}
+
+	page, err := a.Store.ListVMs(r.Context(), store.ListVMsParams{
 		Limit:  limit,
-		Offset: offset,
 		Sort:   sort,
+		Cursor: cursor,
 	})
 	if err != nil {
 		slog.Error("list vms", "err", err)
@@ -89,11 +93,16 @@ func (a *API) listVMs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"items": vms,
+	body := map[string]any{
+		"items": page.Items,
 		"limit": limit,
-		"count": len(vms),
-	})
+		"count": len(page.Items),
+	}
+	if page.NextCursor != "" {
+		body["next_cursor"] = page.NextCursor
+	}
+
+	writeJSON(w, http.StatusOK, body)
 }
 
 // healthz reports that the process is alive. Kubernetes liveness probe.

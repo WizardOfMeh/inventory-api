@@ -1,0 +1,27 @@
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=13897.04..13897.61 rows=20 width=30) (actual time=104.652..104.656 rows=20.00 loops=1)
+   Buffers: shared hit=272557
+   ->  Index Scan using idx_vms_ram_id_desc on vms  (cost=0.42..14180.65 rows=500000 width=30) (actual time=0.010..95.541 rows=490020.00 loops=1)
+         Index Searches: 1
+         Buffers: shared hit=272557
+ Planning:
+   Buffers: shared hit=136
+ Planning Time: 0.232 ms
+ Execution Time: 104.668 ms
+(9 rows)
+
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..1.94 rows=20 width=30) (actual time=0.013..0.031 rows=20.00 loops=1)
+   Buffers: shared hit=10
+   ->  Index Scan using idx_vms_ram_id_desc on vms  (cost=0.42..5781.41 rows=76252 width=30) (actual time=0.013..0.029 rows=20.00 loops=1)
+         Index Cond: (ROW(ram, id) < ROW(2048, 250000))
+         Index Searches: 1
+         Buffers: shared hit=10
+ Planning:
+   Buffers: shared hit=139
+ Planning Time: 0.223 ms
+ Execution Time: 0.045 ms
+(10 rows)
+
