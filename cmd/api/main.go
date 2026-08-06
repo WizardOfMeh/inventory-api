@@ -20,6 +20,9 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// version is injected at build time via -ldflags "-X main.version=..."
+var version = "dev"
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -32,6 +35,8 @@ func main() {
 }
 
 func run() error {
+	slog.Info("starting", "version", version)
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
