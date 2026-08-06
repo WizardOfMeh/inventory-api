@@ -20,6 +20,9 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// version is injected at build time via -ldflags "-X main.version=..."
+var version = "dev"
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -32,6 +35,8 @@ func main() {
 }
 
 func run() error {
+	slog.Info("starting", "version", version)
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -46,7 +51,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			slog.Error("closing database pool", "err", err)
+		}
+	}()
 
 	api := &httpapi.API{
 		Store: store.New(db),
@@ -110,7 +119,7 @@ func openDB(ctx context.Context, cfg config.Config) (*sql.DB, error) {
 	// instead, but keep it bounded so a genuinely bad DSN still fails the
 	// startup probe rather than hanging forever.
 	if err := pingWithRetry(ctx, db, cfg.StartupTimeout); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
