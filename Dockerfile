@@ -14,8 +14,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY . .
 
-# Cache mounts keep the module and build caches across builds without
-# baking them into the image — the classic "why is every build 90s" fix.
+# Cache mounts keep the module and build caches between builds without
+# putting them into the image.
 #   CGO_ENABLED=0  -> fully static binary, runs on scratch/distroless
 #   -trimpath      -> no absolute build-machine paths inside the binary
 #   -w -s          -> strip DWARF and symbol table
@@ -34,11 +34,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Trade-off: there is nothing to exec into for debugging. That is handled
 # by ephemeral containers instead:
 #   kubectl debug -it <pod> --image=busybox --target=api
-#
-# If you would rather keep a shell in the image, swap these two lines for:
-#   FROM alpine:3.22
-#   RUN apk add --no-cache ca-certificates tzdata && adduser -DH -u 65532 app
-# and accept a larger surface (~8 MB, apk present, shell present).
 FROM gcr.io/distroless/static-debian12:nonroot
 
 WORKDIR /app

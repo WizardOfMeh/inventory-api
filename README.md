@@ -3,11 +3,8 @@
 A small Go service that exposes a homelab inventory — physical nodes and the
 VMs running on them — over a JSON HTTP API.
 
-It exists because I wanted a backend I could actually operate rather than
-demo: it runs against a real PostgreSQL instance, ships as a 20 MB distroless
-image, and is deployed to a k3s cluster where the database lives on a
-different host. Most of the decisions below came from watching it fail and
-fixing it, not from a tutorial.
+It runs against PostgreSQL on a separate host, ships as a 20 MB distroless
+image and is deployed to a k3s cluster.
 
 ## Stack
 
@@ -58,7 +55,7 @@ make seed
 ## API
 
 All `/api/v1/*` routes require `Authorization: Bearer <token>`.
-The probe endpoints do not — see [Probes](#probes-and-the-liveness-trap).
+The probe endpoints do not — see [Probes](#liveness-and-readiness-probes).
 
 | Method | Path | Description |
 |---|---|---|
@@ -90,8 +87,6 @@ response omits `next_cursor`, there is nothing more to fetch.
 ## Design notes
 
 ### Keyset pagination instead of OFFSET
-
-This is the main thing the project is about.
 
 `OFFSET` looks like it skips rows. It does not — Postgres walks the index and
 discards every skipped entry, so the cost grows linearly with page depth. On
@@ -137,11 +132,11 @@ tiebreaker — without breaking every consumer.
 {"error": "cursor belongs to sort \"ram_desc\", not \"name_asc\""}
 ```
 
-The trade-off is real: keyset cannot jump to an arbitrary page number, only
-move forward from a known position. For an API that is the right shape anyway,
-and it is why the response carries a cursor instead of a total page count.
+Keyset cannot jump to an arbitrary page number, only move forward from a
+known position. That is why the response carries a cursor instead of a total
+page count.
 
-### Probes and the liveness trap
+### Liveness and readiness probes
 
 `/healthz` and `/readyz` look similar and mean opposite things.
 
@@ -241,7 +236,7 @@ Images are tagged by commit SHA, never `latest` — `latest` with
 `maxUnavailable: 0` means a rollout brings up the new pod and waits for it to
 be ready before removing the old one.
 
-Two things that cost me time and are worth writing down:
+Two problems I ran into:
 
 `k3s ctr images import` needs `-n=k8s.io`. Without the namespace flag the
 image lands where the kubelet cannot see it, and the pod fails with
@@ -253,8 +248,6 @@ Installing with `--cluster-cidr=10.244.0.0/16 --service-cidr=10.245.0.0/16`
 fixes it. Worth checking before the first deploy rather than after.
 
 ## Known limitations
-
-Kept honest rather than quiet:
 
 - **`/nodes/{id}/inventory` is unpaginated.** A node with 25,000 VMs returns
   all of them in one response. It needs the same cursor treatment as the list

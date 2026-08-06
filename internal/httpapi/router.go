@@ -4,7 +4,7 @@ import "net/http"
 
 // Routes builds the HTTP handler.
 //
-// Probes are deliberately mounted outside the auth middleware: kubelet does
+// Probes are mounted outside the auth middleware because kubelet does
 // not send an Authorization header, so protected probes would return 401 and
 // the pod would be restarted forever.
 func Routes(api *API, token string) http.Handler {

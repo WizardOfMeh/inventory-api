@@ -169,9 +169,8 @@ type VMPage struct {
 // that into a single index seek, and the cost stays flat however deep the
 // client pages.
 //
-// The trade-off is that keyset cannot jump to an arbitrary page number — it
-// only moves forward from a known position. That is the right shape for an
-// API anyway, and it is why the response carries a cursor rather than a
+// Keyset cannot jump to an arbitrary page number, it only moves forward from
+// a known position. That is why the response carries a cursor rather than a
 // total page count.
 func (s *Store) ListVMs(ctx context.Context, p ListVMsParams) (VMPage, error) {
 	spec, ok := sortSpecs[p.Sort]
