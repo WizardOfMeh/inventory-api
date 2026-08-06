@@ -57,7 +57,7 @@ func (s *Store) NodeInventory(ctx context.Context, nodeID int) (Node, error) {
 	if err != nil {
 		return Node{}, fmt.Errorf("query node inventory: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var (
 		node  Node
@@ -205,14 +205,14 @@ func (s *Store) ListVMs(ctx context.Context, p ListVMsParams) (VMPage, error) {
 
 	sb.WriteString(" ORDER BY ")
 	sb.WriteString(spec.orderBy)
-	sb.WriteString(fmt.Sprintf(" LIMIT $%d", len(args)+1))
+	fmt.Fprintf(&sb, " LIMIT $%d", len(args)+1)
 	args = append(args, p.Limit)
 
 	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
 	if err != nil {
 		return VMPage{}, fmt.Errorf("query vms: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	vms := make([]VM, 0, p.Limit)
 	for rows.Next() {
