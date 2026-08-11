@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"log/slog"
@@ -92,7 +93,11 @@ func Recover(next http.Handler) http.Handler {
 
 // BearerAuth checks the Authorization header against the configured token.
 func BearerAuth(token string) func(http.Handler) http.Handler {
-	want := []byte(token)
+	// ConstantTimeCompare returns 0 immediately when the arguments differ
+	// in length, without comparing contents, so the token length still
+	// leaks through response timing. Hashing both sides first makes every
+	// comparison exactly 32 bytes.
+	wantSum := sha256.Sum256([]byte(token))
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,9 +109,8 @@ func BearerAuth(token string) func(http.Handler) http.Handler {
 			}
 
 			got := []byte(strings.TrimPrefix(header, "Bearer "))
-			// Constant-time comparison: a plain != leaks the token length
-			// and prefix through response timing.
-			if subtle.ConstantTimeCompare(got, want) != 1 {
+			gotSum := sha256.Sum256(got)
+			if subtle.ConstantTimeCompare(gotSum[:], wantSum[:]) != 1 {
 				writeError(w, http.StatusUnauthorized, "invalid token")
 				return
 			}
