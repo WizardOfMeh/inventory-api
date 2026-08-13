@@ -210,9 +210,11 @@ against ~19 s cold, without the caches ending up in the image.
   `DATABASE_URL` and `API_TOKEN`. No credentials in the repository, and
   `k8s/secret.example.yaml` is a template — the real Secret is created out of
   band.
-- Token comparison uses `subtle.ConstantTimeCompare`. A plain `!=` returns
-  early on the first mismatched byte, which leaks the token through response
-  timing.
+- Both sides of the token comparison are SHA-256 hashed before
+  `subtle.ConstantTimeCompare`. The function alone is not enough: it returns 0
+  immediately when the arguments differ in length, without comparing contents,
+  so an unhashed comparison still leaks the token length through response
+  timing. Hashing makes every comparison exactly 32 bytes.
 - Sort orders are a closed whitelist mapped from user input, so no part of the
   `ORDER BY` clause is ever attacker-controlled.
 - Container runs as UID 65532 with `runAsNonRoot`, `readOnlyRootFilesystem`,
@@ -247,6 +249,33 @@ k3s defaults its pod network to `10.42.0.0/16`. My LAN is `10.42.0.0/24`, so
 Installing with `--cluster-cidr=10.244.0.0/16 --service-cidr=10.245.0.0/16`
 fixes it. Worth checking before the first deploy rather than after.
 
+## Tests
+
+```bash
+go test ./...                    # unit tests only
+DATABASE_URL=... go test ./...   # adds the store integration tests
+```
+
+| Package | Coverage |
+|---|---|
+| `internal/store` | 87.5% |
+| `internal/httpapi` | 75.5% |
+
+`internal/store` tests run against a real PostgreSQL — the CI job already
+provides one as a service container. `TestMain` applies the schema by reading
+`migrations/0001_init.sql` directly, so the test schema cannot drift from the
+real one, and skips the whole package when `DATABASE_URL` is absent.
+
+The pagination tests exercise the claim this project makes rather than the
+mechanics around it: walking the cursor to the end must visit every row
+exactly once, across all four sort orders. The fixture deliberately repeats
+`ram` values, since a dataset with unique values would never exercise the `id`
+tiebreaker that keeps the ordering total.
+
+`internal/httpapi` tests build the real router with a nil store: every case is
+rejected by auth or by parameter validation, so a nil dereference would mean
+validation let something through.
+
 ## Known limitations
 
 - **`/nodes/{id}/inventory` is unpaginated.** A node with 25,000 VMs returns
@@ -258,9 +287,8 @@ fixes it. Worth checking before the first deploy rather than after.
 - **Redis is in the compose file but unused.** Cache-aside for node inventory
   is the obvious next step.
 - **No OpenAPI specification** — the table above is the contract.
-- **Test coverage is limited to cursor encoding and validation.** The database
-  layer needs integration tests with testcontainers; the handlers need
-  `httptest` coverage of the status-code paths.
+- **`cmd/api` and `internal/config` are untested.** Wiring and environment
+  parsing are only exercised by the process actually starting.
 - **`sslmode=disable`** is acceptable on a trusted LAN segment and would not
   be in production.
 
