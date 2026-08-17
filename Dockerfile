@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Trade-off: there is nothing to exec into for debugging. That is handled
 # by ephemeral containers instead:
 #   kubectl debug -it <pod> --image=busybox --target=api
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 
 WORKDIR /app
 COPY --from=builder /out/api /app/api
